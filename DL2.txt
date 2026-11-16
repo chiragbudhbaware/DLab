@@ -1,0 +1,96 @@
+import tensorflow as tf
+
+
+
+
+#from keras.models import sequential
+from keras.datasets import mnist
+import matplotlib.pyplot as plt
+import numpy as np
+import random
+
+
+
+
+
+from keras.models import Sequential
+
+
+
+
+(x_train, y_train), (x_test, y_test) = mnist.load_data()
+
+
+
+
+x_train = x_train/255
+x_test = x_test/255
+
+
+
+
+import keras
+model = Sequential()
+
+
+
+
+model.add(keras.layers.Flatten(input_shape = (28,28)))
+model.add(keras.layers.Dense(128,activation = "relu"))
+model.add(keras.layers.Dense(10,activation = "softmax"))
+
+
+
+
+model.compile(optimizer = "sgd", loss = "sparse_categorical_crossentropy", metrics = ["accuracy"])
+
+
+
+
+neunet = model.fit(x_train, y_train, validation_data = (x_test, y_test), epochs = 5)
+
+
+
+
+print(x_train.shape)
+print(x_test.shape)
+
+
+
+
+test_loss, test_acc = model.evaluate(x_test, y_test)
+
+
+
+
+print("loss = %.3f" % test_loss)
+print("accuracy = %.3f" % test_acc)
+
+
+
+
+n = random.randint(0,9999)
+plt.imshow(x_test[n])
+plt.show()
+
+
+
+
+prediction = model.predict(x_test)
+print("the handwritten in the image is: ", np.argmax(prediction[n]))
+
+
+
+
+
+import matplotlib.pyplot as plt
+
+plt.plot(neunet.history['accuracy'], label='Accuracy')
+plt.plot(neunet.history['val_accuracy'], label='Val Accuracy')
+plt.legend()
+plt.show()
+
+plt.plot(neunet.history['loss'], label='Loss')
+plt.plot(neunet.history['val_loss'], label='Val Loss')
+plt.legend()
+plt.show()

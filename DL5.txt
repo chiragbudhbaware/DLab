@@ -1,0 +1,232 @@
+%pip install -q --upgrade gensim nltk matplotlib scikit-learn
+
+
+
+
+import re
+import urllib.request
+import numpy as np
+import nltk
+import gensim
+import matplotlib.pyplot as plt
+
+from nltk.corpus import stopwords
+from nltk.tokenize import sent_tokenize, word_tokenize
+from gensim.models import Word2Vec
+from sklearn.decomposition import PCA
+
+nltk.download("punkt", quiet=True)
+nltk.download("punkt_tab", quiet=True)
+nltk.download("stopwords", quiet=True)
+
+print("Gensim version:", gensim.__version__)
+print("Libraries imported successfully.")
+
+
+
+
+
+url = "https://www.gutenberg.org/files/11/11-0.txt"
+
+try:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; CBOW student assignment)"}
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        raw_text = response.read().decode("utf-8", errors="ignore")
+    print("Dataset downloaded from Project Gutenberg.")
+except Exception as e:
+    print("Could not download the dataset; using a small sample instead.")
+    print("Reason:", e)
+    raw_text = '''
+    Alice was beginning to get very tired of sitting by her sister on the bank.
+    She was considering whether the pleasure of making a daisy chain would be worth
+    the trouble of getting up and picking the flowers. The rabbit ran quickly through
+    the garden. Alice followed the rabbit and found a beautiful garden full of flowers.
+    The garden was quiet and the flowers were bright. The rabbit ran into a small house.
+    Alice looked at the house and walked slowly through the garden.
+    '''
+
+print("Number of characters:", len(raw_text))
+print(raw_text[:500])
+
+
+
+
+
+# Remove digits and special characters; keep letters and sentence punctuation.
+clean_text = re.sub(r"[^A-Za-z.!?\s]", " ", raw_text)
+clean_text = re.sub(r"\s+", " ", clean_text).strip()
+clean_text = clean_text.lower()
+
+stop_words = set(stopwords.words("english"))
+sentences = sent_tokenize(clean_text)
+
+data = []
+for sentence in sentences:
+    words = word_tokenize(sentence)
+    words = [
+        word for word in words
+        if word.isalpha() and len(word) > 1 and word not in stop_words
+    ]
+    if len(words) >= 2:
+        data.append(words)
+
+print("Number of prepared sentences:", len(data))
+print("First 5 tokenized sentences:")
+for sentence in data[:5]:
+    print(sentence)
+
+
+
+
+vocabulary = sorted({word for sentence in data for word in sentence})
+print("Vocabulary size:", len(vocabulary))
+print("First 30 words:", vocabulary[:30])
+
+
+
+
+
+window_size = 2
+training_examples = []
+
+for sentence in data:
+    for target_index in range(window_size, len(sentence) - window_size):
+        context = (
+            sentence[target_index - window_size:target_index]
+            + sentence[target_index + 1:target_index + window_size + 1]
+        )
+        target = sentence[target_index]
+        training_examples.append((context, target))
+
+print("Number of context-target examples:", len(training_examples))
+print("\nFirst 5 training examples:")
+for context, target in training_examples[:5]:
+    print("Context:", context, "=> Target:", target)
+
+
+
+
+
+vector_size = 100
+
+model = Word2Vec(
+    sentences=data,
+    vector_size=vector_size,
+    window=window_size,
+    min_count=1,
+    workers=1,
+    sg=0,          # 0 = CBOW; 1 = Skip-gram
+    negative=5,
+    epochs=100,
+    seed=42
+)
+
+print("CBOW model trained successfully.")
+print("Vocabulary size learned by model:", len(model.wv))
+print("Vector size:", model.vector_size)
+
+
+
+
+
+print("First 30 vocabulary words:")
+print(list(model.wv.key_to_index.keys())[:30])
+
+word_to_check = next(iter(model.wv.key_to_index))
+print("\nExample word:", word_to_check)
+print("Embedding vector (first 10 values):")
+print(model.wv[word_to_check][:10])
+
+
+
+
+
+# Choose a common word from the model vocabulary.
+candidate_words = ["alice", "rabbit", "garden", "time", "little", "said"]
+word = next((w for w in candidate_words if w in model.wv), next(iter(model.wv.key_to_index)))
+
+print("Selected word:", word)
+print("Most similar words:")
+for similar_word, score in model.wv.most_similar(word, topn=min(10, len(model.wv) - 1)):
+    print(f"{similar_word:15s} cosine similarity = {score:.4f}")
+
+
+
+
+
+# Use the first generated training example whose context words are in the vocabulary.
+chosen_example = next(
+    (
+        (context, target)
+        for context, target in training_examples
+        if all(word in model.wv for word in context)
+    ),
+    None
+)
+
+if chosen_example is None:
+    print("Not enough context examples to demonstrate prediction. Try a larger corpus.")
+else:
+    context_words, actual_target = chosen_example
+    print("Context words:", context_words)
+    print("Actual target word:", actual_target)
+
+    predictions = model.predict_output_word(context_words, topn=10)
+    if predictions:
+        print("\nTop predicted output words:")
+        for predicted_word, probability in predictions:
+            print(f"{predicted_word:15s} score = {probability:.6f}")
+    else:
+        print("No predictions returned. Try a larger corpus or check that negative sampling is enabled.")
+
+
+
+
+
+
+def cosine_similarity_words(word1, word2):
+    if word1 not in model.wv or word2 not in model.wv:
+        return None
+    return float(model.wv.similarity(word1, word2))
+
+pairs_to_check = [
+    (word, word),
+    ("alice", "rabbit"),
+    ("alice", "garden")
+]
+
+print("Cosine similarity checks:")
+for w1, w2 in pairs_to_check:
+    score = cosine_similarity_words(w1, w2)
+    if score is None:
+        print(f"{w1} - {w2}: one or both words are not in the vocabulary")
+    else:
+        print(f"{w1} - {w2}: {score:.4f}")
+
+
+
+
+
+
+# Plot up to 50 words so the chart remains readable.
+words_to_plot = list(model.wv.key_to_index.keys())[:50]
+
+if len(words_to_plot) >= 2:
+    vectors = np.array([model.wv[word] for word in words_to_plot])
+    pca = PCA(n_components=2, random_state=42)
+    points = pca.fit_transform(vectors)
+
+    plt.figure(figsize=(12, 8))
+    plt.scatter(points[:, 0], points[:, 1])
+    for i, word in enumerate(words_to_plot):
+        plt.annotate(word, (points[i, 0], points[i, 1]), fontsize=8)
+    plt.title("CBOW Word Embeddings (PCA projection)")
+    plt.xlabel("Principal Component 1")
+    plt.ylabel("Principal Component 2")
+    plt.grid(True, alpha=0.3)
+    plt.show()
+else:
+    print("Not enough words to create a PCA plot.")

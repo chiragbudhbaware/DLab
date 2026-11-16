@@ -1,0 +1,433 @@
+%pip install -q tensorflow tensorflow-datasets matplotlib scikit-learn
+
+
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+import tensorflow as tf
+import tensorflow_datasets as tfds
+
+from tensorflow.keras import layers, models
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.applications.vgg16 import preprocess_input
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+
+print("TensorFlow version:", tf.__version__)
+print("TensorFlow Datasets version:", tfds.__version__)
+print("GPU devices:", tf.config.list_physical_devices("GPU"))
+
+
+
+
+
+(ds_train, ds_val, ds_test), ds_info = tfds.load(
+    "tf_flowers",
+    split=["train[:70%]", "train[70%:85%]", "train[85%:]"],
+    as_supervised=True,
+    with_info=True
+)
+
+class_names = ds_info.features["label"].names
+num_classes = len(class_names)
+
+print("Classes:", class_names)
+print("Number of classes:", num_classes)
+print("Training examples:", ds_info.splits["train"].num_examples * 0.70)
+print("Dataset loaded.")
+
+
+
+
+
+IMG_SIZE = (150, 150)
+BATCH_SIZE = 32
+AUTOTUNE = tf.data.AUTOTUNE
+
+def prepare_image(image, label):
+    image = tf.image.resize(image, IMG_SIZE)
+    image = tf.cast(image, tf.float32)
+    image = preprocess_input(image)
+    label = tf.one_hot(label, depth=num_classes)
+    return image, label
+
+train_ds = (
+    ds_train
+    .map(prepare_image, num_parallel_calls=AUTOTUNE)
+    .shuffle(1000)
+    .batch(BATCH_SIZE)
+    .prefetch(AUTOTUNE)
+)
+val_ds = (
+    ds_val
+    .map(prepare_image, num_parallel_calls=AUTOTUNE)
+    .batch(BATCH_SIZE)
+    .prefetch(AUTOTUNE)
+)
+test_ds = (
+    ds_test
+    .map(prepare_image, num_parallel_calls=AUTOTUNE)
+    .batch(BATCH_SIZE)
+    .prefetch(AUTOTUNE)
+)
+
+print("Image preprocessing completed.")
+
+
+
+
+
+
+# Display 9 images from the raw dataset
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10, 6))
+
+for images, labels in ds_train.map(
+    lambda image, label: (
+        tf.image.resize(image, (224, 224)),
+        label
+    )
+).batch(9).take(1):
+
+    for i in range(len(images)):
+        ax = plt.subplot(3, 3, i + 1)
+        plt.imshow(images[i].numpy().astype("uint8"))
+        plt.title(class_names[int(labels[i])])
+        plt.axis("off")
+
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+base_model = VGG16(
+    weights="imagenet",
+    include_top=False,
+    input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3)
+)
+
+print("VGG16 loaded.")
+print("Base model output shape:", base_model.output_shape)
+
+
+
+
+
+base_model.trainable = False
+print("Base model trainable:", base_model.trainable)
+
+
+
+
+
+inputs = layers.Input(shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
+x = base_model(inputs, training=False)
+x = layers.GlobalAveragePooling2D()(x)
+x = layers.Dense(256, activation="relu")(x)
+x = layers.Dropout(0.4)(x)
+x = layers.Dense(64, activation="relu")(x)
+outputs = layers.Dense(num_classes, activation="softmax")(x)
+
+model = models.Model(inputs, outputs)
+
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+    loss="categorical_crossentropy",
+    metrics=["accuracy"]
+)
+
+model.summary()
+
+
+
+
+
+
+
+callbacks = [
+    EarlyStopping(
+        monitor="val_loss",
+        patience=4,
+        restore_best_weights=True
+    ),
+    ReduceLROnPlateau(
+        monitor="val_loss",
+        factor=0.2,
+        patience=2,
+        min_lr=1e-6
+    )
+]
+
+history = model.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=15,
+    callbacks=callbacks
+)
+
+
+
+
+
+
+print("Training epochs completed:", len(history.history["loss"]))
+print("Best validation accuracy:", max(history.history["val_accuracy"]))
+print("Best validation loss:", min(history.history["val_loss"]))
+print("Final training accuracy:", history.history["accuracy"][-1])
+
+
+
+
+
+
+print("Epochs recorded:", len(history.history["loss"]))
+
+print("Best epoch:",
+      history.history["val_loss"].index(
+          min(history.history["val_loss"])
+      ) + 1)
+
+print("Early stopping patience:",
+      callbacks[0].patience)
+
+print("Restore best weights:",
+      callbacks[0].restore_best_weights)
+
+
+
+
+
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+axes[0].plot(history.history["accuracy"], label="Training accuracy")
+axes[0].plot(history.history["val_accuracy"], label="Validation accuracy")
+axes[0].set_title("Accuracy")
+axes[0].set_xlabel("Epoch")
+axes[0].set_ylabel("Accuracy")
+axes[0].legend()
+
+axes[1].plot(history.history["loss"], label="Training loss")
+axes[1].plot(history.history["val_loss"], label="Validation loss")
+axes[1].set_title("Loss")
+axes[1].set_xlabel("Epoch")
+axes[1].set_ylabel("Loss")
+axes[1].legend()
+
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+
+test_loss, test_accuracy = model.evaluate(test_ds, verbose=1)
+print(f"Test loss: {test_loss:.4f}")
+print(f"Test accuracy: {test_accuracy:.4f}")
+print(f"Test accuracy (%): {test_accuracy * 100:.2f}%")
+
+
+
+
+
+
+y_true = []
+y_pred = []
+
+for images, labels in test_ds:
+    probabilities = model.predict(images, verbose=0)
+    y_true.extend(np.argmax(labels.numpy(), axis=1))
+    y_pred.extend(np.argmax(probabilities, axis=1))
+
+print(classification_report(
+    y_true,
+    y_pred,
+    labels=list(range(num_classes)),
+    target_names=class_names,
+    zero_division=0
+))
+
+
+
+
+
+
+
+
+cm = confusion_matrix(y_true, y_pred, labels=list(range(num_classes)))
+display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
+fig, ax = plt.subplots(figsize=(8, 8))
+display.plot(ax=ax, xticks_rotation=45, colorbar=False)
+plt.title("Confusion Matrix — VGG16 Transfer Learning")
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+# Unfreeze the base model, then freeze all layers except the final convolutional block.
+base_model.trainable = True
+
+for layer in base_model.layers:
+    layer.trainable = layer.name.startswith("block5")
+
+# Recompile after changing trainable layers.
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+    loss="categorical_crossentropy",
+    metrics=["accuracy"]
+)
+
+print("Trainable base-model layers:")
+for layer in base_model.layers:
+    if layer.trainable:
+        print(layer.name)
+
+
+
+
+
+
+fine_tune_callbacks = [
+    EarlyStopping(monitor="val_loss", patience=3, restore_best_weights=True),
+    ReduceLROnPlateau(monitor="val_loss", factor=0.2, patience=2, min_lr=1e-7)
+]
+
+fine_history = model.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=8,
+    callbacks=fine_tune_callbacks
+)
+
+fine_test_loss, fine_test_accuracy = model.evaluate(test_ds, verbose=1)
+print(f"Fine-tuned test loss: {fine_test_loss:.4f}")
+print(f"Fine-tuned test accuracy: {fine_test_accuracy:.4f}")
+print(f"Fine-tuned test accuracy (%): {fine_test_accuracy * 100:.2f}%")
+
+
+
+
+
+
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+correct_image = None
+correct_label = None
+correct_prediction = None
+correct_confidence = None
+
+# Resize images before batching so all shapes match
+resized_test_ds = ds_test.map(
+    lambda image, label: (
+        tf.image.resize(image, IMG_SIZE),
+        label
+    )
+).batch(16)
+
+for raw_images, raw_labels in resized_test_ds:
+
+    # VGG16 preprocessing
+    processed_images = preprocess_input(
+        tf.cast(raw_images, tf.float32)
+    )
+
+    probabilities = model.predict(
+        processed_images, verbose=0
+    )
+
+    predicted_indices = np.argmax(probabilities, axis=1)
+    actual_indices = raw_labels.numpy().astype(int)
+
+    # Find correctly classified images
+    matches = np.where(
+        predicted_indices == actual_indices
+    )[0]
+
+    if len(matches) > 0:
+        i = matches[0]
+
+        correct_image = raw_images[i].numpy().astype("uint8")
+        correct_label = actual_indices[i]
+        correct_prediction = predicted_indices[i]
+        correct_confidence = (
+            probabilities[i][correct_prediction] * 100
+        )
+        break
+
+if correct_image is not None:
+    plt.figure(figsize=(6, 6))
+    plt.imshow(correct_image)
+    plt.title(
+        f"Predicted: {class_names[correct_prediction]}\n"
+        f"Actual: {class_names[correct_label]}\n"
+        f"Confidence: {correct_confidence:.1f}%"
+    )
+    plt.axis("off")
+    plt.show()
+else:
+    print("No correctly classified image was found.")
+
+
+
+
+
+
+
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import random
+
+# Resize images before batching
+resized_test_ds = ds_test.map(
+    lambda image, label: (
+        tf.image.resize(image, IMG_SIZE),
+        label
+    )
+).batch(16)
+
+# Collect one batch and choose a random image
+images, labels = next(iter(resized_test_ds))
+i = random.randrange(len(images))
+
+# Preprocess the selected image
+selected_image = images[i:i+1]
+processed_image = preprocess_input(
+    tf.cast(selected_image, tf.float32)
+)
+
+# Predict flower class
+probabilities = model.predict(processed_image, verbose=0)[0]
+predicted_index = int(np.argmax(probabilities))
+actual_index = int(labels[i].numpy())
+
+# Display prediction
+plt.figure(figsize=(6, 6))
+plt.imshow(images[i].numpy().astype("uint8"))
+plt.title(
+    f"Predicted: {class_names[predicted_index]}\n"
+    f"Actual: {class_names[actual_index]}\n"
+    f"Confidence: {probabilities[predicted_index] * 100:.1f}%"
+)
+plt.axis("off")
+plt.show()
+
+
+
+
+
+
+
